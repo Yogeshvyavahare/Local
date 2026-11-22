@@ -480,7 +480,7 @@ const SECTIONS = [
     {id:"B2", type:"multi", showIf:{field:"B1",val:"Yes"},  label:"B2. What type of tourism activities / services do you provide?", options:["Accommodation","Food Services","Transportation","Tourist Guiding","Handicrafts","Ticketing","Cultural Activities"], required:true},
     {id:"B3", type:"single", showIf:{field:"B1",val:"Yes"}, label:"B3. How are you currently involved in tourism-related activities?", options:["Full-Time (Primary)","Part-Time (Secondary)","Seasonal","Supportive Role"], required:true},
     {id:"B4", type:"single", showIf:{field:"B1",val:"Yes"}, label:"B4. Is tourism your primary source of income?", options:["Yes","No"], required:true},
-    {id:"B5_total", showIf:{field:"B1",val:"Yes"},   type:"text", label:"B5. Household members involved in tourism — Total",  inputType:"number", optional:true, errorMsg:"Total must be a number and at least male + female, and at least the youth count.", check:a => { const t=+a.B5_total||0, m=+a.B5_male||0, f=+a.B5_female||0, y=+a.B5_youth||0; return (a.B5_total===undefined || a.B5_total==="") || (t>=m+f && t>=y); }},
+    {id:"B5_total", showIf:{field:"B1",val:"Yes"},   type:"text", label:"B5. Household members involved in tourism — Total",  inputType:"number", optional:true, errorMsg:"Male, female and youth numbers cannot be more than the total.", check:a => { if (a.B5_total===undefined || a.B5_total==="") return true; const t=+a.B5_total, m=+a.B5_male||0, f=+a.B5_female||0, y=+a.B5_youth||0; return m<=t && f<=t && y<=t; }},
     {id:"B5_male", showIf:{field:"B1",val:"Yes"},    type:"text", label:"B5. Household members — Male",   inputType:"number", optional:true},
     {id:"B5_female", showIf:{field:"B1",val:"Yes"},  type:"text", label:"B5. Household members — Female", inputType:"number", optional:true},
     {id:"B5_youth", showIf:{field:"B1",val:"Yes"},   type:"text", label:"B5. Household members — Youth (18-35)", inputType:"number", optional:true},
@@ -950,17 +950,19 @@ function restartSurvey() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   const ANDROID = /Android/i.test(navigator.userAgent);
   const store = {
-    get(k, d) { try { const v = localStorage.getItem('va2_' + k); return v === null ? d : v; } catch (e) { return d; } },
-    set(k, v) { try { localStorage.setItem('va2_' + k, v); } catch (e) {} }
+    get(k, d) { try { const v = localStorage.getItem('va3_' + k); return v === null ? d : v; } catch (e) { return d; } },
+    set(k, v) { try { localStorage.setItem('va3_' + k, v); } catch (e) {} }
   };
   const V = {
     on: false, rec: null, listening: false, wantListen: false, speaking: false,
     lang: store.get('lang', 'mr-IN'),
-    wait: +store.get('wait', '1.5'),        // seconds of silence before the answer is taken
+    wait: +store.get('wait', '0.7'),        // seconds of silence before the answer is taken
     accept: store.get('accept', 'now'),     // now | 2 | 3 | 5 | confirm
     speak: store.get('speak', '0') === '1',
     item: null, proposal: null, heard: [], timer: null, cdTimer: null, cdLeft: 0,
-    ignoreUntil: 0, utter: null, skipped: new Set(), history: [], lastError: ''
+    ignoreUntil: 0, utter: null, skipped: new Set(), history: [], lastError: '',
+    input: store.get('input', 'browser'),   // browser = Chrome speech recognition | keyboard = phone keyboard microphone
+    interim: '', log: []
   };
 
   // ---------- understanding spoken answers ----------
@@ -1140,18 +1142,20 @@ function restartSurvey() {
     document.body.appendChild(fab);
     P = el('div', { id: 'va-panel' });
     P.innerHTML = `
-      <div class="va-top"><span><span class="va-dot" id="va-dot"></span><span id="va-status">Off</span></span><span id="va-pos"></span> <span style="opacity:.6">voice v3</span></div>
+      <div class="va-top"><span><span class="va-dot" id="va-dot"></span><span id="va-status">Off</span></span><span id="va-pos"></span> <span style="opacity:.6">voice v5</span></div>
       <div class="va-saved" id="va-saved"></div>
       <div class="va-stem" id="va-stem"></div>
       <div class="va-q" id="va-q"></div>
       <div class="va-opts" id="va-opts"></div>
       <div class="va-heard" id="va-heard"></div>
+      <input id="va-type" type="text" autocomplete="off" placeholder="Tap here, then press the keyboard microphone and speak" style="display:none;width:100%;box-sizing:border-box;padding:12px;font-size:17px;border:2px solid #c9ab86;border-radius:10px;margin:6px 0">
       <div class="va-prop" id="va-prop"></div>
       <div class="va-err" id="va-err"></div>
       <div class="va-btns">
         <button type="button" class="va-main" id="va-listen">Listen</button>
         <button type="button" class="va-ok" id="va-yes" style="display:none">Confirm</button>
         <button type="button" id="va-no" style="display:none">Change</button>
+        <button type="button" class="va-ok" id="va-next" style="display:none">Next</button>
         <button type="button" id="va-repeat">Repeat</button>
         <button type="button" id="va-back">Back</button>
         <button type="button" id="va-skip">Skip</button>
@@ -1161,15 +1165,19 @@ function restartSurvey() {
       </div>
       <div class="va-set" id="va-set">
         <label>Language<select id="va-lang"><option value="mr-IN">Marathi + English</option><option value="hi-IN">Hindi + English</option><option value="en-IN">English (India)</option></select></label>
-        <label>Wait after speaking<select id="va-wait">${[1, 1.5, 2, 3, 4, 6].map(s => `<option value="${s}">${s} s</option>`).join('')}</select></label>
+        <label>Wait after speaking<select id="va-wait">${[0.5, 0.7, 1, 1.5, 2, 3, 4].map(s => `<option value="${s}">${s} s</option>`).join('')}</select></label>
         <label>Save the answer<select id="va-accept"><option value="now">At once, then next question</option><option value="2">After 2 s</option><option value="3">After 3 s</option><option value="5">After 5 s</option><option value="confirm">Only when I confirm</option></select></label>
+        <label>Voice input<select id="va-input"><option value="browser">Chrome speech recognition</option><option value="keyboard">Phone keyboard microphone (Gboard)</option></select></label>
         <label>Read question aloud<select id="va-speak"><option value="0">No (I read it)</option><option value="1">Yes</option></select></label>
       </div>
+      <div style="margin-top:8px"><button type="button" id="va-logbtn">Show microphone log</button></div>
+      <pre id="va-log" style="display:none;white-space:pre-wrap;font-size:11px;background:#fff;border:1px solid #d9c4a6;border-radius:8px;padding:8px;max-height:30vh;overflow:auto"></pre>
       <div style="font-size:11px;color:#7a5a3c;margin-top:8px">Ask the respondent's permission before using voice. Speech is turned into text by the browser's speech service (it needs internet); the form does not save audio. Say "मागे" or "back" to change the last answer.</div>`;
     document.body.appendChild(P);
     $('va-listen').onclick = async () => { if (V.wantListen) { pauseListening(); return; } if (await micPreflight()) listen(); else err(micMsg); };
     $('va-yes').onclick = () => accept();
     $('va-no').onclick = () => { clearProposal(); say(''); };
+    $('va-next').onclick = () => typedNext();
     $('va-repeat').onclick = () => present(true);
     $('va-back').onclick = () => goBackOne();
     $('va-skip').onclick = () => skip();
@@ -1180,7 +1188,23 @@ function restartSurvey() {
     $('va-lang').onchange = e => { V.lang = e.target.value; store.set('lang', V.lang); restartRec(); };
     $('va-wait').onchange = e => { V.wait = +e.target.value; store.set('wait', V.wait); };
     $('va-accept').onchange = e => { V.accept = e.target.value; store.set('accept', V.accept); };
+    $('va-input').value = V.input;
+    $('va-input').onchange = e => { V.input = e.target.value; store.set('input', V.input); applyInputMode(); };
+    $('va-logbtn').onclick = () => { const b = $('va-log'); const show = b.style.display === 'none'; b.style.display = show ? 'block' : 'none';
+      $('va-logbtn').textContent = show ? 'Hide microphone log' : 'Show microphone log'; if (show) b.textContent = V.log.slice().reverse().join('\n') || 'No microphone events yet.'; };
+    // keyboard dictation: the text is taken after the same pause as speech, or at once on Enter
+    let typeTimer = null;
+    const takeTyped = () => { const v = $('va-type').value.trim(); if (!v) return; $('va-type').value = ''; log('typed/dictated: ' + v); handleSpeech([v]); };
+    $('va-type').addEventListener('input', () => { clearTimeout(typeTimer); typeTimer = setTimeout(takeTyped, Math.max(1500, V.wait * 1000)); });
+    $('va-type').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); clearTimeout(typeTimer); takeTyped(); } });
     $('va-speak').onchange = e => { V.speak = e.target.value === '1'; store.set('speak', V.speak ? '1' : '0'); };
+  }
+  function applyInputMode() {
+    const kb = V.input === 'keyboard';
+    $('va-type').style.display = kb ? 'block' : 'none';
+    $('va-listen').style.display = kb ? 'none' : '';
+    if (kb) { pauseListening(); status('Keyboard microphone: tap the box, then the keyboard mic', false); }
+    else if (V.on) listen();
   }
   function buildOnce() { if (!built) { buildPanel(); built = true; } }
   function status(t, on) { $('va-status').textContent = t; $('va-dot').className = 'va-dot' + (on ? ' on' : ''); }
@@ -1188,15 +1212,32 @@ function restartSurvey() {
   function err(t) { const e = $('va-err'); e.textContent = t || ''; e.style.display = t ? 'block' : 'none'; }
 
   // ---------- speech recognition ----------
+  function log(msg) {
+    const t = new Date().toTimeString().slice(0, 8);
+    V.log.push(t + '  ' + msg); if (V.log.length > 60) V.log.shift();
+    const box = $('va-log'); if (box && box.style.display !== 'none') box.textContent = V.log.slice().reverse().join('\n');
+  }
   function makeRec() {
     const r = new SR();
     r.lang = V.lang;
     r.continuous = !ANDROID;          // Android works best with one phrase per session; we restart it
     r.interimResults = true;
     r.maxAlternatives = 3;
-    r.onstart = () => { V.listening = true; status('Listening… speak now', true); $('va-listen').textContent = 'Pause'; };
+    r.onstart = () => { V.listening = true; log('start (' + r.lang + ')'); status('Listening… speak now', true); $('va-listen').textContent = 'Pause'; };
+    r.onaudiostart = () => log('microphone on');
+    r.onsoundstart = () => { log('sound detected'); status('Hearing sound…', true); };
+    r.onspeechstart = () => { log('speech detected'); status('Hearing speech…', true); };
+    r.onspeechend = () => log('speech ended');
+    r.onnomatch = () => { log('no match'); err('Speech heard but not turned into words. Speak a little louder and closer, or switch the language in Settings.'); };
     r.onresult = e => {
-      if (V.speaking || Date.now() < V.ignoreUntil) return;        // ignore our own voice and leftovers
+      const dump = [];
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const res = e.results[i]; const alts = [];
+        for (let j = 0; j < res.length; j++) alts.push(res[j].transcript);
+        dump.push((res.isFinal ? 'FINAL ' : 'part ') + alts.join(' | '));
+      }
+      log('result: ' + dump.join(' ; '));
+      if (V.speaking || Date.now() < V.ignoreUntil) { log('ignored (just after an answer or while reading)'); return; }
       let interim = '';
       const finals = [];
       for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -1204,24 +1245,33 @@ function restartSurvey() {
         if (res.isFinal) { const alts = []; for (let j = 0; j < res.length; j++) alts.push(res[j].transcript); finals.push(alts); }
         else interim += res[0].transcript;
       }
+      V.interim = finals.length ? '' : interim;
       if (interim) { clearTimeout(V.timer); say(V.heard.map(a => a[0]).join(' ') + ' ' + interim); }   // still speaking: keep waiting
       if (finals.length) {
         finals.forEach(a => V.heard.push(a));
         say(V.heard.map(a => a[0]).join(' '));
         clearTimeout(V.timer);
-        V.timer = setTimeout(takeHeard, V.wait * 1000);
+        const combined = V.heard.map(a => a[0]).join(' ').trim();
+        const quick = V.item && V.item.kind !== 'text' && !V.proposal ? interpretAny(V.item, [combined].concat(finals[finals.length - 1])) : { error: 1 };
+        if (!quick.error) takeHeard();                       // clear answer: save at once
+        else V.timer = setTimeout(takeHeard, V.wait * 1000); // unclear: wait briefly for more words
       }
     };
     r.onerror = e => {
-      V.lastError = e.error;
+      V.lastError = e.error; log('error: ' + e.error);
       if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { V.wantListen = false; explainBlocked(e.error); }
       else if (e.error === 'network') { err('No internet for speech-to-text. Tap the answers for now; voice resumes when the network is back.'); }
       else if (e.error === 'audio-capture') { err('No microphone found. Check the phone microphone, or close other apps using it.'); }
       else if (e.error === 'language-not-supported') { err('This language is not supported here. Choose English (India) in Settings.'); }
     };
     r.onend = () => {
-      V.listening = false;
-      if (V.on && V.wantListen && !V.speaking) setTimeout(safeStart, V.lastError === 'network' ? 3000 : 150);
+      V.listening = false; log('end');
+      // some phones close the session without ever marking the words as final: use what was heard
+      if (V.interim && !V.speaking && Date.now() >= V.ignoreUntil) {
+        V.heard.push([V.interim]); V.interim = '';
+        clearTimeout(V.timer); V.timer = setTimeout(takeHeard, V.wait * 1000);
+      }
+      if (V.on && V.wantListen && !V.speaking) setTimeout(safeStart, V.lastError === 'network' ? 3000 : 50);
       else if (!V.speaking) { status(V.on ? 'Paused — tap Listen' : 'Off', false); $('va-listen').textContent = 'Listen'; }
     };
     return r;
@@ -1243,6 +1293,7 @@ function restartSurvey() {
     catch (e) { setTimeout(safeStart, 300); }   // still closing the last session: try again shortly
   }
   function listen() {
+    if (V.input === 'keyboard') return;
     if (!SR) { err('Voice input is not available in this browser. Use Chrome on an Android phone or a laptop.'); return; }
     V.wantListen = true; err(''); safeStart();
   }
@@ -1326,13 +1377,35 @@ function restartSurvey() {
     $('va-stem').textContent = it.kind === 'matrix' ? it.stem.replace(/<[^>]+>/g, '') : '';
     $('va-q').textContent = qtext + (it.f.optional ? '  (optional)' : '');
     $('va-opts').innerHTML = it.kind === 'text'
-      ? `<span class="va-opt">${it.f.inputType === 'number' ? 'Say a number' : 'Say the answer'}</span>`
+      ? `<span class="va-opt">Type this answer in the highlighted box on the form, then tap Next</span>`
       : it.options.map((o, i) => `<span class="va-opt"><b>${i + 1}</b> ${o}</span>`).join('');
+    $('va-next').style.display = it.kind === 'text' ? '' : 'none';
     $('va-skip').style.display = it.f.optional ? '' : 'none';
     const block = document.getElementById('block-' + it.f.id);
     if (block) { block.classList.add('va-current'); block.scrollIntoView({ block: 'center' }); }
     V.heard = [];
-    speakThen(qtext, () => { V.wantListen = true; listen(); });
+    clearInterval(V.typeWatch);
+    if (it.kind === 'text') {
+      // amounts, counts and names are typed: pause the microphone and wait for the typed value
+      pauseListening(); status('Type the answer in the form', false);
+      const input = document.getElementById(it.f.id);
+      if (input) { input.focus({ preventScroll: true }); }
+      V.typeWatch = setInterval(() => { if (V.item === it && answered(it)) { clearInterval(V.typeWatch); present(false); } }, 400);
+      return;
+    }
+    speakThen(qtext, () => {
+      if (V.input === 'keyboard') { const box = $('va-type'); if (box) box.focus({ preventScroll: true }); return; }
+      V.wantListen = true; listen();
+    });
+  }
+  function typedNext() {
+    const it = V.item; if (!it || it.kind !== 'text') return;
+    const input = document.getElementById(it.f.id);
+    const v = input ? input.value.trim() : '';
+    if (!v && !it.f.optional) { err('Please type the answer in the highlighted box first.'); return; }
+    if (v) setAnswer(it.f.id, v); else V.skipped.add(it.key);
+    V.history.push({ step: currentStep, f: it.f.id, row: it.row, kind: it.kind });
+    clearInterval(V.typeWatch); present(false);
   }
 
   function handleSpeech(alts) {
@@ -1383,7 +1456,7 @@ function restartSurvey() {
     else setAnswer(f.id, r.value);
     V.history.push({ step: currentStep, f: f.id, row: it.row, kind: it.kind });
     $('va-saved').textContent = 'Saved: ' + (it.text || '').replace(/<[^>]+>/g, '').slice(0, 60) + ' → ' + r.show;
-    V.ignoreUntil = Date.now() + 600;          // do not carry the tail of this answer into the next question
+    V.ignoreUntil = Date.now() + 350;          // do not carry the tail of this answer into the next question
     say('');
     present(false);
   }
@@ -1419,21 +1492,28 @@ function restartSurvey() {
 
   async function start() {
     buildOnce();
-    const problem = setupProblem();
-    if (problem) { P.style.display = 'block'; $('va-fab').textContent = 'Stop voice'; V.on = true; err(problem); return; }
-    if (!SR) { P.style.display = 'block'; err('Voice input is not available in this browser. Use Chrome on Android or a laptop; tapping still works.'); return; }
-    if (document.getElementById('survey').style.display === 'none') startSurvey();
+    if (getComputedStyle(document.getElementById('survey')).display === 'none') startSurvey();   // started from the cover page
     V.on = true; P.style.display = 'block'; $('va-fab').textContent = 'Stop voice';
     V.skipped.clear(); V.history = [];
     if (V.speak && window.speechSynthesis) speechSynthesis.getVoices();   // load the voice list early
+    let note = '';
+    if (!SR && V.input === 'browser') {
+      V.input = 'keyboard'; store.set('input', 'keyboard'); $('va-input').value = 'keyboard';
+      note = 'Speech recognition is not available in this browser, so the keyboard microphone mode is on: tap the box and use the microphone key of your keyboard.';
+    }
+    applyInputMode();
+    if (V.input === 'keyboard') { present(false); if (note) err(note); return; }
+    const problem = setupProblem();
+    if (problem) { present(false); pauseListening(); err(problem + ' Or choose "Phone keyboard microphone" under Settings > Voice input.'); return; }
     // the first microphone start must come from this tap on some phones
     const micOk = await micPreflight();
     if (!micOk) { present(false); pauseListening(); status('Microphone not available — tap the answers', false); err(micMsg); return; }
     V.wantListen = true; safeStart();
     present(false);
   }
+
   function stop() {
-    V.on = false; pauseListening(); clearProposal(); V.speaking = false;
+    V.on = false; pauseListening(); clearProposal(); V.speaking = false; clearInterval(V.typeWatch);
     if (window.speechSynthesis) speechSynthesis.cancel();
     if (P) P.style.display = 'none';
     const fab = $('va-fab'); if (fab) fab.textContent = 'Voice mode';
